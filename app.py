@@ -8,7 +8,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 
 # === 1. 頁面設定 ===
-st.set_page_config(page_title="鋼筋撿料大師 v19.0 (螺旋詳算版)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="鋼筋撿料大師 v20.0 (算式透明版)", page_icon="🏗️", layout="wide")
 
 # === 2. 初始化 Session State ===
 if 'data_list' not in st.session_state:
@@ -41,7 +41,7 @@ S7_DATA = {
     }
 }
 
-# === 5. 核心查表功能 ===
+# === 5. 查表功能 ===
 def lookup_data(fc, fy, size, type_mode, is_top=False):
     val = 0
     desc = "請手動輸入"
@@ -72,7 +72,7 @@ def lookup_data(fc, fy, size, type_mode, is_top=False):
 def delete_item(index): st.session_state['data_list'].pop(index)
 def clear_all_data(): st.session_state['data_list'] = []
 
-# === 7. 繪圖 (支援圓形) ===
+# === 7. 繪圖 ===
 def plot_section(shape, dims, cover):
     fig, ax = plt.subplots(figsize=(3, 3))
     if shape == 'rect':
@@ -80,11 +80,9 @@ def plot_section(shape, dims, cover):
         rect_conc = patches.Rectangle((0, 0), w, h, linewidth=2, edgecolor='#333333', facecolor='#f0f0f0')
         ax.add_patch(rect_conc)
         if w > 2*cover and h > 2*cover:
-            rect_stir = patches.Rectangle((cover, cover), w-2*cover, h-2*cover, 
-                                          linewidth=1.5, edgecolor='red', linestyle='--', facecolor='none')
+            rect_stir = patches.Rectangle((cover, cover), w-2*cover, h-2*cover, linewidth=1.5, edgecolor='red', linestyle='--', facecolor='none')
             ax.add_patch(rect_stir)
         ax.set_xlim(-10, w+10); ax.set_ylim(-10, h+10)
-        ax.set_title(f"{w}x{h}", fontsize=10)
     elif shape == 'circle':
         d = dims['d']
         r = d / 2
@@ -94,7 +92,6 @@ def plot_section(shape, dims, cover):
             circ_stir = patches.Circle((r, r), r-cover, linewidth=1.5, edgecolor='red', linestyle='--', facecolor='none')
             ax.add_patch(circ_stir)
         ax.set_xlim(-10, d+10); ax.set_ylim(-10, d+10)
-        ax.set_title(f"Spiral D={d}", fontsize=10)
     ax.set_aspect('equal'); ax.axis('off')
     return fig
 
@@ -115,8 +112,8 @@ with st.sidebar:
     unit_price = st.number_input("鋼筋單價 (元/噸)", value=23000, step=500)
 
 # === 9. 主畫面 ===
-st.title("🏗️ 鋼筋撿料大師 v19.0")
-st.caption(f"設定: f'c={fc}, fy={fy}")
+st.title("🏗️ 鋼筋撿料大師 v20.0")
+st.caption(f"設定: f'c={fc}, fy={fy} | 全模式計算式透明預覽")
 
 with st.expander("➕ 新增撿料項目", expanded=True):
     col_input, col_viz = st.columns([2, 1])
@@ -127,9 +124,10 @@ with st.expander("➕ 新增撿料項目", expanded=True):
         with c2: size_key = st.selectbox("番號", list(REBAR_DB.keys()), index=3)
         with c3: cover = st.number_input("保護層", value=global_cover)
         
-        mode = st.radio("模式選擇", 
-                        ["主筋 (梁/柱直料)", "版/牆筋 (依間距)", "箍筋 (Stirrup)", "螺旋箍筋 (Spiral)"], 
-                        horizontal=True)
+        mode = st.radio("模式選擇", ["主筋 (梁/柱直料)", "版/牆筋 (依間距)", "箍筋 (Stirrup)", "螺旋箍筋 (Spiral)"], horizontal=True)
+        
+        db = REBAR_DB[size_key]['db']
+        h90 = math.ceil(max(12*db, 15)); h180 = math.ceil(max(4*db, 6.5))
         
         suggested_lap = 0; lap_desc = ""; is_top = False
         if "主筋" in mode or "版/牆" in mode:
@@ -143,9 +141,8 @@ with st.expander("➕ 新增撿料項目", expanded=True):
         inputs = {}
         
         # --- UI 邏輯 ---
-        
         if "螺旋" in mode: 
-            st.info("🌀 螺旋箍筋 - 搭接採 1.5 圈計算")
+            st.info("🌀 螺旋箍筋 (搭接 1.5 圈)")
             c_a, c_b = st.columns(2)
             with c_a: inputs['D'] = st.number_input("圓柱直徑 D (cm)", min_value=0.0)
             with c_b: inputs['L'] = st.number_input("樁長 L (cm)", min_value=0.0)
@@ -153,29 +150,23 @@ with st.expander("➕ 新增撿料項目", expanded=True):
             with c1: inputs['P'] = st.number_input("間距 Pitch (cm)", value=15.0)
             with c2: inputs['count'] = st.number_input("總支數", min_value=1, value=1)
             
-            # --- 螺旋計算式顯示 & 搭接設定 ---
+            # 計算建議螺旋搭接
             if inputs['D'] > 0 and inputs['P'] > 0:
                 core_d = inputs['D'] - 2*cover
                 circ = math.pi * core_d
                 one_turn = math.sqrt(circ**2 + inputs['P']**2)
-                suggested_lap_spiral = 1.5 * one_turn # 1.5圈
-                
-                st.markdown("#### 📐 螺旋計算式")
-                st.latex(r"D_{core} = D - 2 \times Cover = " + f"{core_d:.1f} cm")
-                st.latex(r"L_{turn} = \sqrt{(\pi D_{core})^2 + P^2} = " + f"{one_turn:.1f} cm")
-                st.latex(r"L_{lap} (1.5圈) = 1.5 \times L_{turn} = " + f"\\mathbf{{{suggested_lap_spiral:.1f} cm}}")
-                
-                st.markdown("👇 **搭接設定 (建議值: 1.5圈)**")
-                inputs['manual_lap'] = st.number_input("搭接長度", value=float(f"{suggested_lap_spiral:.1f}"), step=1.0)
-            else:
-                inputs['manual_lap'] = 0
+                suggested_lap_spiral = 1.5 * one_turn
+            else: suggested_lap_spiral = 0
+            
+            st.markdown(f"👇 **搭接設定 (建議值: 1.5圈)**")
+            inputs['manual_lap'] = st.number_input("搭接長度", value=float(f"{suggested_lap_spiral:.1f}"), step=1.0)
 
         elif "主筋" in mode:
             c_a, c_b = st.columns(2)
             with c_a: inputs['L'] = st.number_input("單支長 (cm)", min_value=0.0)
             with c_b: inputs['count'] = st.number_input("支數", min_value=1, value=1)
             st.markdown(f"👇 **搭接設定 ({lap_desc})**")
-            inputs['manual_lap'] = st.number_input("搭接長度", value=float(suggested_lap), step=1.0, key=f"lap_main_{fc}_{fy}_{size_key}_{is_top}")
+            inputs['manual_lap'] = st.number_input("搭接長度", value=int(suggested_lap), step=1, key=f"lap_main_{fc}_{fy}_{size_key}_{is_top}")
             c_c, c_d = st.columns(2)
             with c_c: inputs['hL'] = st.selectbox("左鉤", ["平切", "90度", "180度"])
             with c_d: inputs['hR'] = st.selectbox("右鉤", ["平切", "90度", "180度"])
@@ -187,9 +178,9 @@ with st.expander("➕ 新增撿料項目", expanded=True):
             with c_range: range_len = st.number_input("佈筋範圍 (cm)", min_value=0.0)
             with c_space: spacing = st.number_input("間距 @ (cm)", min_value=1.0, value=15.0)
             calc_count = math.ceil(range_len / spacing) + 1 if range_len > 0 else 1
-            inputs['count'] = st.number_input("總支數", value=int(calc_count), min_value=1, key=f"count_slab_{range_len}_{spacing}")
+            inputs['count'] = st.number_input("總支數 (自動計算)", value=int(calc_count), min_value=1, key=f"count_slab_{range_len}_{spacing}")
             st.markdown(f"👇 **搭接設定 ({lap_desc})**")
-            inputs['manual_lap'] = st.number_input("搭接長度", value=float(suggested_lap), step=1.0, key=f"lap_slab_{fc}_{fy}_{size_key}_{is_top}")
+            inputs['manual_lap'] = st.number_input("搭接長度", value=int(suggested_lap), step=1, key=f"lap_slab_{fc}_{fy}_{size_key}_{is_top}")
             c_c, c_d = st.columns(2)
             with c_c: inputs['hL'] = st.selectbox("左鉤", ["平切", "90度", "180度"])
             with c_d: inputs['hR'] = st.selectbox("右鉤", ["平切", "90度", "180度"])
@@ -202,8 +193,8 @@ with st.expander("➕ 新增撿料項目", expanded=True):
             if st_mode == "智慧分區":
                 inputs['Span'] = st.number_input("淨跨距 L", min_value=0.0)
                 c1, c2 = st.columns(2)
-                with c1: inputs['sE'] = st.number_input("加密 @", value=10.0)
-                with c2: inputs['sC'] = st.number_input("一般 @", value=15.0)
+                with c1: inputs['sE'] = st.number_input("加密區 @ (填0表無加密)", value=10.0, min_value=0.0) # ★ 修正：允許填0
+                with c2: inputs['sC'] = st.number_input("一般區 @", value=15.0, min_value=1.0)
                 inputs['st_type'] = 'auto'
             else:
                 inputs['count'] = st.number_input("總支數", min_value=1)
@@ -211,17 +202,65 @@ with st.expander("➕ 新增撿料項目", expanded=True):
 
         btn_add = st.button("➕ 加入清單", type="primary", use_container_width=True)
 
-    # 右側視覺化
+    # === 右側：視覺化與【動態計算式預覽】 ===
     with col_viz:
-        if "螺旋" in mode and inputs.get('D', 0) > 0:
-            st.pyplot(plot_section('circle', {'d':inputs['D']}, cover))
-        elif "箍筋" in mode and inputs.get('W', 0) > 0:
-            st.pyplot(plot_section('rect', {'w':inputs['W'], 'h':inputs['H']}, cover))
+        st.markdown("#### 📐 計算式預覽")
+        
+        if "螺旋" in mode:
+            if inputs.get('D', 0) > 0:
+                st.pyplot(plot_section('circle', {'d':inputs['D']}, cover))
+                core_d = inputs['D'] - 2*cover
+                circ = math.pi * core_d
+                one_turn = math.sqrt(circ**2 + inputs['P']**2)
+                st.latex(rf"D_{{core}} = {inputs['D']} - 2({cover}) = {core_d} \text{{ cm}}")
+                st.latex(rf"L_{{turn}} = \sqrt{{(\pi \times {core_d})^2 + {inputs['P']}^2}} = {one_turn:.1f} \text{{ cm}}")
+                
+        elif "箍筋" in mode:
+            if inputs.get('W', 0) > 0 and inputs.get('H', 0) > 0:
+                st.pyplot(plot_section('rect', {'w':inputs['W'], 'h':inputs['H']}, cover))
+                cw = inputs['W'] - 2*cover
+                ch = inputs['H'] - 2*cover
+                hook_s = max(24*db, 20)
+                L_stirrup = (cw+ch)*2 + hook_s
+                st.latex(rf"L_{{core}} = 2 \times ({cw} + {ch}) = {(cw+ch)*2} \text{{ cm}}")
+                st.latex(rf"L_{{hook}} (135^\circ) = \max(24d_b, 20) = {hook_s} \text{{ cm}}")
+                st.latex(rf"L_{{1支}} = {(cw+ch)*2} + {hook_s} = {L_stirrup} \text{{ cm}}")
+                
+                # ★ 智慧分區公式預覽 ★
+                if inputs.get('st_type') == 'auto' and inputs.get('Span', 0) > 0:
+                    span = inputs['Span']
+                    sE = inputs['sE']
+                    sC = inputs['sC']
+                    st.markdown("**支數分配：**")
+                    if sE <= 0: # 無加密區
+                        st.latex(rf"N_{{total}} = \lceil {span} / {sC} \rceil + 1")
+                    else:
+                        zE = 2 * inputs['H']
+                        if zE * 2 >= span:
+                            st.latex(rf"Z_E (2H) \times 2 \ge L \rightarrow \text{{全加密}}")
+                            st.latex(rf"N_{{total}} = \lceil {span} / {sE} \rceil + 1")
+                        else:
+                            zC_len = span - 2*zE
+                            st.latex(rf"Z_{{加密}} = 2 \times H = {zE} \text{{ cm}}")
+                            st.latex(rf"N_{{端}} = 2 \times \lceil {zE} / {sE} \rceil")
+                            st.latex(rf"N_{{中}} = \lceil {zC_len} / {sC} \rceil")
+                            
         elif "主筋" in mode or "版/牆" in mode:
-            st.markdown("#### 📏 參考數據")
-            st.info(f"建議搭接: **{suggested_lap} cm**")
+            if "版/牆" in mode and inputs.get('count', 0) > 0:
+                st.latex(rf"N_{{支數}} = \lceil {range_len} / {spacing} \rceil + 1 = {calc_count}")
+                
+            l_val = inputs.get('L', 0)
+            if l_val > 0:
+                net = l_val - 2*cover
+                hook_l = h90 if inputs['hL']=="90度" else (h180 if inputs['hL']=="180度" else 0)
+                hook_r = h90 if inputs['hR']=="90度" else (h180 if inputs['hR']=="180度" else 0)
+                st.latex(rf"L_{{net}} = {l_val} - 2({cover}) = {net} \text{{ cm}}")
+                if hook_l > 0 or hook_r > 0:
+                    st.latex(rf"L_{{hook}} = {hook_l} + {hook_r} = {hook_l + hook_r} \text{{ cm}}")
+                st.latex(rf"L_{{1支}} = {net + hook_l + hook_r} \text{{ cm (未計搭接)}}")
+                st.caption(f"超過 {stock_len/100}m 時將自動加計搭接長度 ({inputs.get('manual_lap', suggested_lap)}cm)。")
 
-    # 運算邏輯
+    # === 運算加入邏輯 ===
     if btn_add:
         try:
             db = REBAR_DB[size_key]['db']
@@ -244,38 +283,37 @@ with st.expander("➕ 新增撿料項目", expanded=True):
                 final_len = calc; final_count = inputs['count']
                 shape_str = f"L={inputs['L']}"
 
-            elif "螺旋" in mode: # 螺旋
+            elif "螺旋" in mode: 
                 cd = inputs['D'] - 2*cover
                 circ = math.pi * cd
                 one = math.sqrt(circ**2 + inputs['P']**2)
                 turns = inputs['L'] / inputs['P']
-                extra = 3.0 * circ # 收尾3圈
-                
-                # 初始長度
+                extra = 3.0 * circ 
                 total_spiral_len = (one * turns) + extra
-                
-                # 搭接計算 (使用 user 確認過的 1.5圈 長度)
                 spiral_splice_len = inputs['manual_lap']
-                
                 if total_spiral_len > stock_len:
                     laps = math.floor(total_spiral_len / stock_len)
                     total_spiral_len += laps * spiral_splice_len
-                    note_input += f" (搭接{laps}處, 每處{int(spiral_splice_len)}cm)"
-                
-                final_len = total_spiral_len
-                final_count = inputs['count']
+                    note_input += f" (搭接{laps}處)"
+                final_len = total_spiral_len; final_count = inputs['count']
                 shape_str = f"◎ D={inputs['D']}"
 
             elif "箍筋" in mode:
                 cw = inputs['W'] - 2*cover; ch = inputs['H'] - 2*cover
                 final_len = (cw+ch)*2 + max(24*db, 20)
                 if inputs['st_type'] == 'auto':
-                    zE = 2*inputs['H']
-                    if zE*2 >= inputs['Span']: final_count = math.ceil(inputs['Span']/inputs['sE']) + 1
+                    # ★ 修正：支援 sE = 0 的全跨等間距 ★
+                    if inputs['sE'] <= 0:
+                        final_count = math.ceil(inputs['Span'] / inputs['sC']) + 1
+                        note_input += " (全跨等距)"
                     else:
-                        zC = inputs['Span'] - 2*zE
-                        cE = math.ceil(zE/inputs['sE'])*2; cC = math.ceil(zC/inputs['sC'])
-                        final_count = cE+cC+1
+                        zE = 2*inputs['H']
+                        if zE*2 >= inputs['Span']: 
+                            final_count = math.ceil(inputs['Span']/inputs['sE']) + 1
+                        else:
+                            zC = inputs['Span'] - 2*zE
+                            cE = math.ceil(zE/inputs['sE'])*2; cC = math.ceil(zC/inputs['sC'])
+                            final_count = cE+cC+1
                 else: final_count = inputs['count']
                 shape_str = f"口 {inputs['W']}x{inputs['H']}"
 
