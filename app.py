@@ -8,7 +8,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 
 # === 1. 頁面設定 ===
-st.set_page_config(page_title="鋼筋撿料大師 v18.0 (螺旋Bug修復版)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="鋼筋撿料大師 v19.0 (螺旋詳算版)", page_icon="🏗️", layout="wide")
 
 # === 2. 初始化 Session State ===
 if 'data_list' not in st.session_state:
@@ -115,7 +115,7 @@ with st.sidebar:
     unit_price = st.number_input("鋼筋單價 (元/噸)", value=23000, step=500)
 
 # === 9. 主畫面 ===
-st.title("🏗️ 鋼筋撿料大師 v18.0")
+st.title("🏗️ 鋼筋撿料大師 v19.0")
 st.caption(f"設定: f'c={fc}, fy={fy}")
 
 with st.expander("➕ 新增撿料項目", expanded=True):
@@ -142,23 +142,40 @@ with st.expander("➕ 新增撿料項目", expanded=True):
         
         inputs = {}
         
-        # --- UI 邏輯修正：優先判斷螺旋 (防止被"箍筋"字串抓走) ---
+        # --- UI 邏輯 ---
         
         if "螺旋" in mode: 
-            st.info("🌀 螺旋箍筋 (Circular) - 自動計算搭接")
+            st.info("🌀 螺旋箍筋 - 搭接採 1.5 圈計算")
             c_a, c_b = st.columns(2)
             with c_a: inputs['D'] = st.number_input("圓柱直徑 D (cm)", min_value=0.0)
             with c_b: inputs['L'] = st.number_input("樁長 L (cm)", min_value=0.0)
             c1, c2 = st.columns(2)
             with c1: inputs['P'] = st.number_input("間距 Pitch (cm)", value=15.0)
             with c2: inputs['count'] = st.number_input("總支數", min_value=1, value=1)
+            
+            # --- 螺旋計算式顯示 & 搭接設定 ---
+            if inputs['D'] > 0 and inputs['P'] > 0:
+                core_d = inputs['D'] - 2*cover
+                circ = math.pi * core_d
+                one_turn = math.sqrt(circ**2 + inputs['P']**2)
+                suggested_lap_spiral = 1.5 * one_turn # 1.5圈
+                
+                st.markdown("#### 📐 螺旋計算式")
+                st.latex(r"D_{core} = D - 2 \times Cover = " + f"{core_d:.1f} cm")
+                st.latex(r"L_{turn} = \sqrt{(\pi D_{core})^2 + P^2} = " + f"{one_turn:.1f} cm")
+                st.latex(r"L_{lap} (1.5圈) = 1.5 \times L_{turn} = " + f"\\mathbf{{{suggested_lap_spiral:.1f} cm}}")
+                
+                st.markdown("👇 **搭接設定 (建議值: 1.5圈)**")
+                inputs['manual_lap'] = st.number_input("搭接長度", value=float(f"{suggested_lap_spiral:.1f}"), step=1.0)
+            else:
+                inputs['manual_lap'] = 0
 
         elif "主筋" in mode:
             c_a, c_b = st.columns(2)
             with c_a: inputs['L'] = st.number_input("單支長 (cm)", min_value=0.0)
             with c_b: inputs['count'] = st.number_input("支數", min_value=1, value=1)
             st.markdown(f"👇 **搭接設定 ({lap_desc})**")
-            inputs['manual_lap'] = st.number_input("搭接長度", value=int(suggested_lap), step=1, key=f"lap_main_{fc}_{fy}_{size_key}_{is_top}")
+            inputs['manual_lap'] = st.number_input("搭接長度", value=float(suggested_lap), step=1.0, key=f"lap_main_{fc}_{fy}_{size_key}_{is_top}")
             c_c, c_d = st.columns(2)
             with c_c: inputs['hL'] = st.selectbox("左鉤", ["平切", "90度", "180度"])
             with c_d: inputs['hR'] = st.selectbox("右鉤", ["平切", "90度", "180度"])
@@ -172,7 +189,7 @@ with st.expander("➕ 新增撿料項目", expanded=True):
             calc_count = math.ceil(range_len / spacing) + 1 if range_len > 0 else 1
             inputs['count'] = st.number_input("總支數", value=int(calc_count), min_value=1, key=f"count_slab_{range_len}_{spacing}")
             st.markdown(f"👇 **搭接設定 ({lap_desc})**")
-            inputs['manual_lap'] = st.number_input("搭接長度", value=int(suggested_lap), step=1, key=f"lap_slab_{fc}_{fy}_{size_key}_{is_top}")
+            inputs['manual_lap'] = st.number_input("搭接長度", value=float(suggested_lap), step=1.0, key=f"lap_slab_{fc}_{fy}_{size_key}_{is_top}")
             c_c, c_d = st.columns(2)
             with c_c: inputs['hL'] = st.selectbox("左鉤", ["平切", "90度", "180度"])
             with c_d: inputs['hR'] = st.selectbox("右鉤", ["平切", "90度", "180度"])
@@ -204,7 +221,7 @@ with st.expander("➕ 新增撿料項目", expanded=True):
             st.markdown("#### 📏 參考數據")
             st.info(f"建議搭接: **{suggested_lap} cm**")
 
-    # 運算邏輯 (順序修正)
+    # 運算邏輯
     if btn_add:
         try:
             db = REBAR_DB[size_key]['db']
@@ -213,27 +230,42 @@ with st.expander("➕ 新增撿料項目", expanded=True):
             h90 = math.ceil(max(12*db, 15)); h180 = math.ceil(max(4*db, 6.5))
             hook_map = {"平切": 0, "90度": h90, "180度": h180}
 
-            # 1. 螺旋優先判斷
-            if "螺旋" in mode:
+            if "主筋" in mode or "版/牆" in mode:
+                if inputs['L'] <= 0: raise ValueError("長度需大於0")
+                net = inputs['L'] - (2 * cover)
+                add = hook_map[inputs['hL']] + hook_map[inputs['hR']]
+                calc = net + add
+                user_lap = inputs['manual_lap']
+                if calc > stock_len:
+                    laps = math.floor(calc / stock_len)
+                    if calc % stock_len == 0: laps -= 1
+                    calc += laps * user_lap
+                    note_input += f" (搭接{laps}處, L={int(user_lap)})"
+                final_len = calc; final_count = inputs['count']
+                shape_str = f"L={inputs['L']}"
+
+            elif "螺旋" in mode: # 螺旋
                 cd = inputs['D'] - 2*cover
                 circ = math.pi * cd
                 one = math.sqrt(circ**2 + inputs['P']**2)
                 turns = inputs['L'] / inputs['P']
                 extra = 3.0 * circ # 收尾3圈
                 
+                # 初始長度
                 total_spiral_len = (one * turns) + extra
-                spiral_splice_len = max(48 * db, 30) # 搭接長度
+                
+                # 搭接計算 (使用 user 確認過的 1.5圈 長度)
+                spiral_splice_len = inputs['manual_lap']
                 
                 if total_spiral_len > stock_len:
                     laps = math.floor(total_spiral_len / stock_len)
                     total_spiral_len += laps * spiral_splice_len
-                    note_input += f" (搭接{laps}處)"
+                    note_input += f" (搭接{laps}處, 每處{int(spiral_splice_len)}cm)"
                 
                 final_len = total_spiral_len
                 final_count = inputs['count']
                 shape_str = f"◎ D={inputs['D']}"
 
-            # 2. 一般矩形箍筋
             elif "箍筋" in mode:
                 cw = inputs['W'] - 2*cover; ch = inputs['H'] - 2*cover
                 final_len = (cw+ch)*2 + max(24*db, 20)
@@ -246,21 +278,6 @@ with st.expander("➕ 新增撿料項目", expanded=True):
                         final_count = cE+cC+1
                 else: final_count = inputs['count']
                 shape_str = f"口 {inputs['W']}x{inputs['H']}"
-
-            # 3. 主筋/版牆
-            elif "主筋" in mode or "版/牆" in mode:
-                if inputs['L'] <= 0: raise ValueError("長度需大於0")
-                net = inputs['L'] - (2 * cover)
-                add = hook_map[inputs['hL']] + hook_map[inputs['hR']]
-                calc = net + add
-                user_lap = inputs['manual_lap']
-                if calc > stock_len:
-                    laps = math.floor(calc / stock_len)
-                    if calc % stock_len == 0: laps -= 1
-                    calc += laps * user_lap
-                    note_input += f" (搭接{laps}處, L={user_lap})"
-                final_len = calc; final_count = inputs['count']
-                shape_str = f"L={inputs['L']}"
 
             total_w = (final_len/100) * uw * final_count
             st.session_state['data_list'].append({
