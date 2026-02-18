@@ -8,9 +8,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 
 # === 1. 頁面設定 ===
-st.set_page_config(page_title="鋼筋撿料大師 v22.0 (動態即時拆料版)", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="鋼筋撿料大師 v23.0 (計算式完整版)", page_icon="🏗️", layout="wide")
 
-# === 2. 初始化 Session State (儲存原始資料) ===
+# === 2. 初始化 Session State ===
 if 'raw_data_list' not in st.session_state:
     st.session_state['raw_data_list'] = []
 
@@ -68,7 +68,6 @@ def lookup_data(fc, fy, size, type_mode, is_top=False):
 
 # === 自動拆料演算法 ===
 def split_rebar(req_len, stock_len, lap_len):
-    """回傳一個陣列，包含每一段要切的單支長度"""
     if req_len <= stock_len:
         return [req_len]
     pieces = []
@@ -126,11 +125,11 @@ with st.sidebar:
     unit_price = st.number_input("鋼筋單價 (元/噸)", value=23000, step=500)
     
     st.markdown("---")
-    st.subheader("3. 動態撿料設定 (即時生效)")
+    st.subheader("3. 動態撿料設定")
     auto_split = st.checkbox("✅ 啟用自動拆料", value=True, help="變更此選項，右側表格會瞬間切換顯示模式！")
 
 # === 9. 主畫面 ===
-st.title("🏗️ 鋼筋撿料大師 v22.0")
+st.title("🏗️ 鋼筋撿料大師 v23.0")
 st.caption(f"即時互動引擎: {'🚀 啟用自動拆料' if auto_split else '📦 關閉拆料(合併顯示)'} | 定尺 {stock_len/100}m")
 
 with st.expander("➕ 新增撿料項目", expanded=True):
@@ -191,10 +190,13 @@ with st.expander("➕ 新增撿料項目", expanded=True):
             c_a, c_b = st.columns(2)
             with c_a: inputs['L'] = st.number_input("實際跨距/淨長 (cm)", min_value=0.0)
             c_range, c_space = st.columns(2)
-            with c_range: range_len = st.number_input("佈筋範圍 (cm)", min_value=0.0)
-            with c_space: spacing = st.number_input("間距 @ (cm)", min_value=1.0, value=15.0)
-            calc_count = math.ceil(range_len / spacing) + 1 if range_len > 0 else 1
-            inputs['count'] = st.number_input("總支數", value=int(calc_count), min_value=1, key=f"count_slab_{range_len}_{spacing}")
+            with c_range: inputs['range_len'] = st.number_input("佈筋範圍 (cm)", min_value=0.0)
+            with c_space: inputs['spacing'] = st.number_input("間距 @ (cm)", min_value=1.0, value=15.0)
+            
+            r_len = inputs['range_len']
+            spc = inputs['spacing']
+            calc_count = math.ceil(r_len / spc) + 1 if r_len > 0 else 1
+            inputs['count'] = st.number_input("總支數 (自動計算)", value=int(calc_count), min_value=1, key=f"count_slab_{r_len}_{spc}")
             st.markdown(f"👇 **搭接設定 ({lap_desc})**")
             inputs['manual_lap'] = st.number_input("搭接長度", value=int(suggested_lap), step=1, key=f"lap_slab_{fc}_{fy}_{size_key}_{is_top}")
             c_c, c_d = st.columns(2)
@@ -218,21 +220,85 @@ with st.expander("➕ 新增撿料項目", expanded=True):
 
         btn_add = st.button("➕ 加入清單", type="primary", use_container_width=True)
 
+    # === 右側：視覺化與動態計算式預覽 ===
     with col_viz:
-        st.markdown("#### 📐 預覽計算")
-        if "螺旋" in mode and inputs.get('D', 0) > 0:
-            st.pyplot(plot_section('circle', {'d':inputs['D']}, cover))
-        elif "箍筋" in mode and inputs.get('W', 0) > 0:
-            st.pyplot(plot_section('rect', {'w':inputs['W'], 'h':inputs['H']}, cover))
-        elif "主筋" in mode or "版/牆" in mode:
-            st.info("參數就緒，點擊加入清單！")
+        st.markdown("#### 📐 計算式預覽")
+        if "螺旋" in mode:
+            d_val = inputs.get('D', 0)
+            if d_val > 0:
+                st.pyplot(plot_section('circle', {'d': d_val}, cover))
+                core_d = d_val - 2*cover
+                circ = math.pi * core_d
+                p_val = inputs.get('P', 15.0)
+                one_turn = math.sqrt(circ**2 + p_val**2) if p_val > 0 else 0
+                st.latex(rf"D_{{core}} = {d_val} - 2({cover}) = {core_d} \text{{ cm}}")
+                st.latex(rf"L_{{turn}} = \sqrt{{(\pi \times {core_d:.1f})^2 + {p_val}^2}} = {one_turn:.1f} \text{{ cm}}")
+                if one_turn > 0:
+                    st.latex(rf"L_{{lap}} (1.5\text{{圈}}) = 1.5 \times {one_turn:.1f} = \mathbf{{{1.5*one_turn:.1f} cm}}")
+                
+        elif "箍筋" in mode:
+            w_val = inputs.get('W', 0)
+            h_val = inputs.get('H', 0)
+            if w_val > 0 and h_val > 0:
+                st.pyplot(plot_section('rect', {'w': w_val, 'h': h_val}, cover))
+                cw = w_val - 2*cover
+                ch = h_val - 2*cover
+                hook_s = max(24*db, 20)
+                L_stirrup = (cw+ch)*2 + hook_s
+                st.latex(rf"L_{{core}} = 2 \times ({cw} + {ch}) = {(cw+ch)*2} \text{{ cm}}")
+                st.latex(rf"L_{{hook}} (135^\circ) = \max(24d_b, 20) = {hook_s} \text{{ cm}}")
+                st.latex(rf"L_{{1\text{{支}}}} = {(cw+ch)*2} + {hook_s} = {L_stirrup} \text{{ cm}}")
+                
+                if inputs.get('st_type') == 'auto' and inputs.get('Span', 0) > 0:
+                    span = inputs.get('Span', 0)
+                    sE = inputs.get('sE', 10.0)
+                    sC = inputs.get('sC', 15.0)
+                    st.markdown("**支數分配：**")
+                    if sE <= 0:
+                        st.latex(rf"N_{{total}} = \lceil {span} / {sC} \rceil + 1")
+                    else:
+                        zE = 2 * h_val
+                        if zE * 2 >= span:
+                            st.latex(rf"Z_E (2H) \times 2 \ge L \rightarrow \text{{全加密}}")
+                            st.latex(rf"N_{{total}} = \lceil {span} / {sE} \rceil + 1")
+                        else:
+                            zC_len = span - 2*zE
+                            st.latex(rf"Z_{{\text{{加密}}}} = 2 \times H = {zE} \text{{ cm}}")
+                            st.latex(rf"N_{{\text{{端}}}} = 2 \times \lceil {zE} / {sE} \rceil")
+                            st.latex(rf"N_{{\text{{中}}}} = \lceil {zC_len} / {sC} \rceil")
 
-    # === 運算加入邏輯 (改為儲存「原始資料」) ===
+        elif "主筋" in mode or "版/牆" in mode:
+            if "版/牆" in mode and inputs.get('count', 0) > 0:
+                r_len = inputs.get('range_len', 0)
+                spc = inputs.get('spacing', 15.0)
+                st.latex(rf"N_{{\text{{支數}}}} = \lceil {r_len} / {spc} \rceil + 1 = {inputs['count']}")
+
+            l_val = inputs.get('L', 0)
+            if l_val > 0:
+                net = l_val - 2*cover
+                hl_str = inputs.get('hL', '平切')
+                hr_str = inputs.get('hR', '平切')
+                hook_l = h90 if hl_str=="90度" else (h180 if hl_str=="180度" else 0)
+                hook_r = h90 if hr_str=="90度" else (h180 if hr_str=="180度" else 0)
+                req_len = net + hook_l + hook_r
+                
+                st.latex(rf"L_{{net}} = {l_val} - 2({cover}) = {net} \text{{ cm}}")
+                if hook_l > 0 or hook_r > 0: 
+                    st.latex(rf"L_{{hook}} = {hook_l} + {hook_r} = {hook_l + hook_r} \text{{ cm}}")
+                st.latex(rf"L_{{req}} = {req_len} \text{{ cm (物理展開長)}}")
+                
+                if req_len > stock_len:
+                    st.error(f"⚠️ 長度超過定尺 ({stock_len/100}m)！", icon="✂️")
+                    if auto_split:
+                        st.caption("啟動自動拆料：將自動切割為定尺與餘料搭接段。")
+                    else:
+                        st.caption("未啟動拆料：將把所有搭接長度合併顯示於同一筆。")
+
+    # === 運算加入邏輯 (儲存原始資料) ===
     if btn_add:
         try:
             uw = REBAR_DB[size_key]['weight']
             hook_map = {"平切": 0, "90度": h90, "180度": h180}
-
             base_len = 0
             final_count = inputs.get('count', 1)
             shape_str = ""
@@ -241,7 +307,7 @@ with st.expander("➕ 新增撿料項目", expanded=True):
             if "主筋" in mode or "版/牆" in mode:
                 if inputs['L'] <= 0: raise ValueError("長度需大於0")
                 net = inputs['L'] - (2 * cover)
-                base_len = net + hook_map[inputs['hL']] + hook_map[inputs['hR']]
+                base_len = net + hook_map[inputs.get('hL', '平切')] + hook_map[inputs.get('hR', '平切')]
                 shape_str = f"L={inputs['L']}"
                 sys_mode = "main"
 
@@ -252,7 +318,7 @@ with st.expander("➕ 新增撿料項目", expanded=True):
                 one_turn = math.sqrt(circ**2 + inputs['P']**2)
                 base_len = (one_turn * (inputs['L'] / inputs['P'])) + (3.0 * circ)
                 shape_str = f"◎ D={inputs['D']}"
-                sys_mode = "main" # 螺旋也會過長，需要搭接與拆料
+                sys_mode = "main"
 
             elif "箍筋" in mode:
                 cw = inputs['W'] - 2*cover; ch = inputs['H'] - 2*cover
@@ -265,18 +331,12 @@ with st.expander("➕ 新增撿料項目", expanded=True):
                         else:
                             final_count = math.ceil(zE/inputs['sE'])*2 + math.ceil((inputs['Span'] - 2*zE)/inputs['sC']) + 1
                 shape_str = f"口 {inputs['W']}x{inputs['H']}"
-                sys_mode = "stirrup" # 箍筋不參與拆料與搭接
+                sys_mode = "stirrup"
 
-            # 儲存「未拆分、未加搭接」的物理原始狀態
             st.session_state['raw_data_list'].append({
-                "mode": sys_mode,
-                "size_key": size_key,
-                "shape_str": shape_str,
-                "base_len": base_len, # 物理需要總長
-                "lap_len": inputs.get('manual_lap', 0), # 使用者確認的搭接長度
-                "count": final_count,
-                "uw": uw,
-                "note": note_input
+                "mode": sys_mode, "size_key": size_key, "shape_str": shape_str,
+                "base_len": base_len, "lap_len": inputs.get('manual_lap', 0),
+                "count": final_count, "uw": uw, "note": note_input
             })
             st.success("已加入原始資料！請見下方報表。")
             st.rerun()
@@ -289,50 +349,41 @@ st.subheader("📋 即時運算加工明細表")
 
 display_data = []
 
-# 動態從 raw_data_list 產生要在畫面上顯示的列 (Rows)
 for raw_idx, item in enumerate(st.session_state.get('raw_data_list', [])):
     b_len = item['base_len']
     count = item['count']
     lap = item['lap_len']
     uw = item['uw']
     
-    # 箍筋類 (不需搭接不需拆料)
     if item['mode'] == 'stirrup' or b_len <= stock_len:
         display_data.append({
-            "raw_idx": raw_idx,
-            "番號": item['size_key'], "形狀": item['shape_str'],
+            "raw_idx": raw_idx, "番號": item['size_key'], "形狀": item['shape_str'],
             "單支長": round(b_len, 1), "支數": int(count), "總長(cm)": round(b_len * count, 1),
             "單位重": uw, "總重": round((b_len/100)*uw*count, 2), "備註": item['note']
         })
     else:
-        # 主筋/螺旋類：過長需要處理
         if auto_split:
-            # 啟用拆料
             pieces = split_rebar(b_len, stock_len, lap)
             for p_idx, p_len in enumerate(pieces):
                 part_note = item['note'] + f" (Part {p_idx+1}/{len(pieces)} {'定尺' if p_len==stock_len else '餘料'})"
                 display_data.append({
-                    "raw_idx": raw_idx, # 記住母體ID
-                    "番號": item['size_key'], "形狀": item['shape_str'],
+                    "raw_idx": raw_idx, "番號": item['size_key'], "形狀": item['shape_str'],
                     "單支長": round(p_len, 1), "支數": int(count), "總長(cm)": round(p_len * count, 1),
                     "單位重": uw, "總重": round((p_len/100)*uw*count, 2), "備註": part_note
                 })
         else:
-            # 不拆料，傳統合併顯示
             laps = math.floor(b_len / stock_len)
             if b_len % stock_len == 0: laps -= 1
             total_merge_len = b_len + laps * lap
             merge_note = item['note'] + f" (含搭接{laps}處)"
             display_data.append({
-                "raw_idx": raw_idx,
-                "番號": item['size_key'], "形狀": item['shape_str'],
+                "raw_idx": raw_idx, "番號": item['size_key'], "形狀": item['shape_str'],
                 "單支長": round(total_merge_len, 1), "支數": int(count), "總長(cm)": round(total_merge_len * count, 1),
                 "單位重": uw, "總重": round((total_merge_len/100)*uw*count, 2), "備註": merge_note
             })
 
 if display_data:
     df = pd.DataFrame(display_data)
-    
     st.markdown("#### 📊 總量統計")
     summary = df.groupby("番號")["總重"].sum().reset_index()
     summary["噸數"] = summary["總重"] / 1000; summary["金額"] = summary["噸數"] * unit_price
@@ -346,18 +397,11 @@ if display_data:
     for i, row in df.iterrows():
         cols = st.columns([0.5, 1, 1.5, 1, 1, 1.5, 1, 1.5, 3, 0.5])
         cols[0].write(f"{i+1}"); cols[1].write(row['番號']); cols[2].write(row['形狀'])
-        
-        # 紅字警告：如果未開拆料，導致單長超過定尺
         len_str = f"<span style='color:red; font-weight:bold'>{row['單支長']}</span>" if row['單支長'] > stock_len else f"{row['單支長']}"
         cols[3].markdown(len_str, unsafe_allow_html=True)
-        
         cols[4].write(f"{row['支數']}"); cols[5].write(f"{row['總長(cm)']}")
         cols[6].write(f"{row['單位重']}"); cols[7].write(f"{row['總重']}"); cols[8].write(row['備註'])
-        
-        # 刪除按鈕 (刪除母體 raw_idx，相關拆料會一起消失)
-        if cols[9].button("🗑️", key=f"del_{i}"): 
-            delete_item(row['raw_idx'])
-            st.rerun()
+        if cols[9].button("🗑️", key=f"del_{i}"): delete_item(row['raw_idx']); st.rerun()
 
     st.markdown("---")
     col_del, col_dl = st.columns([1, 4])
